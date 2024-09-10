@@ -682,6 +682,12 @@ AS_IF([test "x$ul_cv_syscall_setns" = xno], [
    have_setns_syscall="no"
 ])
 
+have_pidfd_getfd_syscall="yes"
+UL_CHECK_SYSCALL([pidfd_getfd])
+AS_IF([test "x$ul_cv_syscall_pidfd_getfd" = xno], [
+   have_pidfd_getfd_syscall="no"
+])
+
 UL_CHECK_SYSCALL([pidfd_open])
 UL_CHECK_SYSCALL([pidfd_send_signal])
 UL_CHECK_SYSCALL([close_range])
@@ -2126,6 +2132,15 @@ UL_BUILD_INIT([lsipc], [check])
 UL_REQUIRES_LINUX([lsipc])
 UL_REQUIRES_BUILD([lsipc], [libsmartcols])
 AM_CONDITIONAL([BUILD_LSIPC], [test "x$build_lsipc" = xyes])
+
+AC_ARG_ENABLE([lsk],
+  AS_HELP_STRING([--disable-lsk], [do not build lsk]),
+  [], [UL_DEFAULT_ENABLE([lsk], [check])]
+)
+UL_BUILD_INIT([lsk])
+UL_REQUIRES_LINUX([lsk])
+UL_REQUIRES_HAVE([lsk], [pidfd_getfd_syscall], [pidfd_getfd syscall])
+AM_CONDITIONAL([BUILD_LSK], [test "x$build_lsk" = xyes])
 
 AC_ARG_ENABLE([lsns],
   AS_HELP_STRING([--disable-lsns], [do not build lsns]),

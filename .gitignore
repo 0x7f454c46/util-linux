@@ -138,6 +138,7 @@ ylwrap
 /lsfd
 /lsipc
 /lsirq
+/lsk
 /lslocks
 /lslogins
 /lsmem

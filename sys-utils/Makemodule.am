@@ -343,6 +343,15 @@ prlimit_CFLAGS = $(AM_CFLAGS) -I$(ul_libsmartcols_incdir)
 endif
 
 
+if BUILD_LSK
+usrbin_exec_PROGRAMS += lsk
+## MANPAGES += sys-utils/lsk.1
+## dist_noinst_DATA += sys-utils/lsk.1.adoc
+lsk_SOURCES = sys-utils/lsk.c lib/exec_shell.c
+lsk_LDADD = $(LDADD) libcommon.la
+endif
+
+
 if BUILD_LSNS
 usrbin_exec_PROGRAMS += lsns
 MANPAGES += sys-utils/lsns.8
