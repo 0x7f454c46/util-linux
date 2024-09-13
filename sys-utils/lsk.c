@@ -13,7 +13,10 @@
 #include <errno.h>
 #include <error.h>
 #include <getopt.h>
+#include <inttypes.h>
+#include <linux/in.h>
 #include <linux/sockios.h>
+#include <linux/tcp.h>
 #include <sched.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -48,10 +51,16 @@ static void __attribute__((__noreturn__)) usage(void)
 	fputs(_(" -J, --join [command]       enter socket network namespace\n"), stdout);
 	fputs(_(" -n, --ns                   show network namespace id\n"), stdout);
 	fputs(_(" -N, --ns-cookie            show network namespace cookie\n"), stdout);
+	fputs(_("Other printing options:\n"), stdout);
+	fputs(_(" -a, --address              \n"), stdout);
+	fputs(_(" -A, --address-family       the socket domain as an integer\n"), stdout);
+	fputs(_(" -B, --buffer               maximum socket send/receive buffer in bytes\n"), stdout);
+	fputs(_(" -P, --protocol             socket protocol as an integer\n"), stdout);
 	fputs(_(" -q, --quiet                don't print the header and be less verbose\n"), stdout);
+	fputs(_(" -T, --tcp                  TCP information about the socket\n"), stdout);
 
 	fputs(USAGE_SEPARATOR, stdout);
-	fprintf(stdout, USAGE_HELP_OPTIONS(5));
+	fprintf(stdout, USAGE_HELP_OPTIONS(6));
 	fprintf(stdout, USAGE_MAN_TAIL("lsk(1)"));
 
 	exit(EXIT_SUCCESS);
@@ -61,9 +70,19 @@ struct output_opts {
 	uint8_t show_netns	: 1,
 		show_nscookie 	: 1,
 		be_quiet 	: 1,
-		unused		: 5;
+		show_buffer	: 1,
+		show_family	: 1,
+		show_protocol	: 1,
+		show_tcp	: 1,
+		unused		: 1;
 };
 static struct output_opts output;
+
+static bool output_requested(void)
+{
+	return output.show_netns || output.show_nscookie || output.show_buffer
+	       || output.show_family || output.show_protocol || output.show_tcp;
+}
 
 struct fd_list {
 	unsigned fd;
@@ -81,6 +100,80 @@ static void free_fd_list(struct fd_list *to_free)
 		next = to_free->next;
 		free(to_free);
 	} while ((to_free = next));
+}
+
+static void print_header(void)
+{
+	if (output.be_quiet)
+		return;
+	if (!output_requested())
+		return;
+
+	printf("%4s ", "FD");
+	if (output.show_netns)
+		printf(" %10s", "NS");
+	if (output.show_nscookie)
+		printf(" %10s", "NS cookie");
+	if (output.show_family)
+		printf(" %3s", "AF");
+	if (output.show_protocol)
+		printf(" %8s", "Protocol");
+	if (output.show_tcp)
+		printf(" %9s", "TCP state");
+	if (output.show_buffer)
+		printf(" %s", "SND RCV buffer size");
+	putchar('\n');
+}
+
+static void print_fd(unsigned target_fd, uintmax_t netns, uint64_t ns_cookie,
+		     int sk)
+{
+	socklen_t sz;
+	int domain, protocol;
+
+	printf("%4u:", target_fd);
+
+	if (output.show_netns)
+		printf(" %10ju", netns);
+	if (output.show_nscookie)
+		printf(" %10" PRIu64, ns_cookie);
+
+	sz = sizeof(domain);
+	if (getsockopt(sk, SOL_SOCKET, SO_DOMAIN, &domain, &sz) < 0)
+		err(EXIT_FAILURE, _("getsockopt(SO_DOMAIN)"));
+	if (getsockopt(sk, SOL_SOCKET, SO_PROTOCOL, &protocol, &sz) < 0)
+		err(EXIT_FAILURE, _("getsockopt(SO_PROTOCOL)"));
+
+	if (output.show_family)
+		printf(" %3d", domain);
+
+	if (output.show_protocol)
+		printf(" %8d", protocol);
+
+	if (output.show_tcp) {
+		if (protocol != IPPROTO_TCP) {
+			printf(" %9s", "-");
+		} else {
+			struct tcp_info ti;
+			sz = sizeof(ti);
+			if (getsockopt(sk, IPPROTO_TCP, TCP_INFO, &ti, &sz) < 0)
+				err(EXIT_FAILURE, _("getsockopt(TCP_INFO)"));
+			printf(" %9d", ti.tcpi_state);
+		}
+	}
+
+	if (output.show_buffer) {
+		int sndbuf, rcvbuf;
+
+		sz = sizeof(sndbuf);
+		if (getsockopt(sk, SOL_SOCKET, SO_SNDBUF, &sndbuf, &sz) < 0)
+			err(EXIT_FAILURE, _("getsockopt(SO_SNDBUF)"));
+		if (getsockopt(sk, SOL_SOCKET, SO_RCVBUF, &rcvbuf, &sz) < 0)
+			err(EXIT_FAILURE, _("getsockopt(SO_RCVBUF)"));
+		printf(" %8d %8d", sndbuf, rcvbuf);
+	}
+
+	putchar('\n');
 }
 
 static int do_pid_fd(int pid_fd, unsigned target_fd, bool join)
@@ -114,12 +207,7 @@ static int do_pid_fd(int pid_fd, unsigned target_fd, bool join)
 	if (join && output.be_quiet)
 		goto no_print;
 
-	printf("%8u:", target_fd);
-	if (output.show_netns)
-		printf("\t%8ju", (uintmax_t)sb.st_ino);
-	if (output.show_nscookie)
-		printf("\t%8zu", ns_cookie);
-	putchar('\n');
+	print_fd(target_fd, (uintmax_t)sb.st_ino, ns_cookie, sk);
 
 no_print:
 	if (ret < 0) { /* first time in the function */
@@ -133,21 +221,6 @@ no_print:
 
 	close(sk);
 	return ret;
-}
-
-static void print_header(void)
-{
-	if (output.be_quiet)
-		return;
-	if (!output.show_netns && !output.show_nscookie)
-		return;
-
-	printf("%8s", "FD");
-	if (output.show_netns)
-		printf("\t%8s", "NS");
-	if (output.show_nscookie)
-		printf("\t%8s", "NS cookie");
-	putchar('\n');
 }
 
 static char *get_optarg(int argc, char *argv[])
@@ -164,6 +237,7 @@ static char *get_optarg(int argc, char *argv[])
 int main(int argc, char *argv[])
 {
 	static const struct option longopts[] = {
+		{ "buffer", no_argument, NULL, 'B'},
 		{ "fd", required_argument, NULL, 'F' },
 		{ "join", optional_argument, NULL, 'J' },
 		{ "ns", no_argument, NULL, 'n' },
@@ -206,8 +280,14 @@ int main(int argc, char *argv[])
 	}
 
 	optind = 2;
-	while ((c = getopt_long(argc, argv, "+F:J::nNqVh", longopts, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "+ABF:J::nNPqTVh", longopts, NULL)) != -1) {
 		switch (c) {
+		case 'A':
+			output.show_family = 1;
+			break;
+		case 'B':
+			output.show_buffer = 1;
+			break;
 		case 'F':
 			struct fd_list *tmp = target_fds;
 
@@ -243,8 +323,14 @@ int main(int argc, char *argv[])
 		case 'N':
 			output.show_nscookie = 1;
 			break;
+		case 'P':
+			output.show_protocol = 1;
+			break;
 		case 'q':
 			output.be_quiet = 1;
+			break;
+		case 'T':
+			output.show_tcp = 1;
 			break;
 		case 'h':
 			usage();
@@ -259,14 +345,13 @@ int main(int argc, char *argv[])
 		errx(EXIT_FAILURE, _("Unknown option %s"), argv[optind]);
 
 	if (opt_join) {
-		if (output.be_quiet &&
-		   (output.show_netns || output.show_nscookie))
+		if (output.be_quiet && output_requested())
 			errx(EXIT_FAILURE, _("Can't be quiet on --join as output requested by other options"));
 		if (target_fds && target_fds->next)
 			errx(EXIT_FAILURE, _("Multiple fds specified: %d, %d, which netns to --join?"),
 			    target_fds->fd, target_fds->next->fd);
 	} else {
-		if (!output.show_netns && !output.show_nscookie)
+		if (!output_requested())
 			errx(EXIT_FAILURE, _("Nothing to show - choose appropriate option"));
 	}
 
